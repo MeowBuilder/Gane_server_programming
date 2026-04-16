@@ -327,7 +327,7 @@ void worker_thread()
 		EXP_OVER* exp_over = reinterpret_cast<EXP_OVER*>(over);
 		switch (exp_over->m_iotype) {
 		case IO_ACCEPT: {
-			cout << "Client connected." << endl;
+			//cout << "Client connected." << endl;
 			int my_id = player_index++;
 			CreateIoCompletionPort((HANDLE)exp_over->m_client_socket, g_iocp, my_id, 0);
 			std::shared_ptr<SESSION> new_pl = std::make_shared<SESSION>(exp_over->m_client_socket, my_id);
