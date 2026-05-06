@@ -5,8 +5,8 @@
 #include <thread>
 #include <vector>
 #include <mutex>
-#include <chrono>
 #include <unordered_set>
+#include <chrono>
 #include <concurrent_priority_queue.h>
 #include "protocol.h"
 
@@ -17,20 +17,6 @@ using namespace std::chrono;
 
 constexpr int VIEW_RANGE = 5;
 
-
-constexpr int EVENT_MOVE = 1;
-
-struct EVENT_TYPE {
-	int obj_id;
-	system_clock::time_point wakeup_time;
-	int event_id;
-	int target_id;
-	constexpr bool operator < (const EVENT_TYPE& _Left) const
-	{
-		return (wakeup_time > _Left.wakeup_time);
-	}
-};
-concurrency::concurrent_priority_queue<EVENT_TYPE> timer_queue;
 
 enum COMP_TYPE { OP_ACCEPT, OP_RECV, OP_SEND };
 class OVER_EXP {
@@ -71,8 +57,9 @@ public:
 	int		_prev_remain;
 	unordered_set <int> _view_list;
 	mutex	_vl;
-	int	last_move_time;
+	int last_move_time;
 	system_clock::time_point npc_last_move_time;
+
 public:
 	SESSION()
 	{
@@ -130,23 +117,32 @@ public:
 		p.type = SC_REMOVE_OBJECT;
 		do_send(&p);
 	}
-	void do_npc_random_move();
-	void do_timer_move() {
-		do_npc_random_move();
-
-		EVENT_TYPE event;
-		event.event_id = EVENT_MOVE;
-		event.obj_id = _id;
-		event.wakeup_time = system_clock::now() + 1s;
-		timer_queue.push(event);
-	}
-	void heart_beat() {
-		do_npc_random_move();
+	void do_random_move();
+	void heart_beat()
+	{
+		// NPC의 경우, 일정 시간마다 랜덤한 방향으로 이동하는 기능을 구현한다.
+		// 이동한 후에는, 이동한 위치를 주변 플레이어들에게 알려준다.
+		do_random_move();
 	}
 };
 
 HANDLE h_iocp;
 array<SESSION, MAX_USER + MAX_NPC> clients;
+
+constexpr int EVENT_MOVE = 1;
+
+struct event_type {
+	int obj_id;
+	system_clock::time_point wakeup_time;
+	int event_id;
+	int target_id;
+
+	constexpr bool operator < (const event_type& _Left) const
+	{
+		return (wakeup_time > _Left.wakeup_time);
+	}
+};
+concurrency::concurrent_priority_queue<event_type> timer_queue;
 
 
 // NPC 구현 첫번째 방법
@@ -190,6 +186,48 @@ bool can_see(int from, int to)
 	return abs(clients[from].y - clients[to].y) <= VIEW_RANGE;
 }
 
+void SESSION::do_random_move()
+{
+	unordered_set<int> old_vl;
+	for (auto& obj : clients) {
+		if (ST_INGAME != obj._state) continue;
+		if (true == is_npc(obj._id)) continue;
+		if (true == can_see(_id, obj._id))
+			old_vl.insert(obj._id);
+	}
+
+
+	switch (rand() % 4) {
+	case 0: if (x < (W_WIDTH - 1)) x++; break;
+	case 1: if (x > 0) x--; break;
+	case 2: if (y < (W_HEIGHT - 1)) y++; break;
+	case 3:if (y > 0) y--; break;
+	}
+
+	unordered_set<int> new_vl;
+	for (auto& obj : clients) {
+		if (ST_INGAME != obj._state) continue;
+		if (true == is_npc(obj._id)) continue;
+		if (true == can_see(_id, obj._id))
+			new_vl.insert(obj._id);
+	}
+
+	for (auto pl : new_vl) {
+		if (0 == old_vl.count(pl)) {
+			// 플레이어의 시야에 등장
+			clients[pl].send_add_player_packet(_id);
+		}
+		else {
+			// 플레이어가 계속 보고 있음.
+			clients[pl].send_move_packet(_id);
+		}
+	}
+	///vvcxxccxvvdsvdvds
+	for (auto pl : old_vl)
+		if (0 == new_vl.count(pl))
+				clients[pl].send_remove_player_packet(_id);
+}
+
 void SESSION::send_move_packet(int c_id)
 {
 	SC_MOVE_OBJECT_PACKET p;
@@ -225,56 +263,6 @@ void SESSION::send_chat_packet(int p_id, const char* mess)
 	packet.type = SC_CHAT;
 	strcpy_s(packet.mess, mess);
 	do_send(&packet);
-}
-
-void SESSION::do_npc_random_move()
-{
-	unordered_set<int> old_vl;
-	for (auto& obj : clients) {
-		if (ST_INGAME != obj._state) continue;
-		if (true == is_npc(obj._id)) continue;
-		if (true == can_see(_id, obj._id))
-			old_vl.insert(obj._id);
-	}
-
-	switch (rand() % 4) {
-	case 0: if (x < (W_WIDTH - 1)) x++; break;
-	case 1: if (x > 0) x--; break;
-	case 2: if (y < (W_HEIGHT - 1)) y++; break;
-	case 3:if (y > 0) y--; break;
-	}
-
-	unordered_set<int> new_vl;
-	for (auto& obj : clients) {
-		if (ST_INGAME != obj._state) continue;
-		if (true == is_npc(obj._id)) continue;
-		if (true == can_see(_id, obj._id))
-			new_vl.insert(obj._id);
-	}
-
-	for (auto pl : new_vl) {
-		if (0 == old_vl.count(pl)) {
-			// 플레이어의 시야에 등장
-			clients[pl].send_add_player_packet(_id);
-		}
-		else {
-			// 플레이어가 계속 보고 있음.
-			clients[pl].send_move_packet(_id);
-		}
-	}
-	///vvcxxccxvvdsvdvds
-	for (auto pl : old_vl) {
-		if (0 == new_vl.count(pl)) {
-			clients[pl]._vl.lock();
-			if (0 != clients[pl]._view_list.count(_id)) {
-				clients[pl]._vl.unlock();
-				clients[pl].send_remove_player_packet(_id);
-			}
-			else {
-				clients[pl]._vl.unlock();
-			}
-		}
-	}
 }
 
 int get_new_client_id()
@@ -529,22 +517,20 @@ void InitializeNPC()
 		clients[i].x = rand() % W_WIDTH;
 		clients[i].y = rand() % W_HEIGHT;
 		clients[i]._id = i;
-		clients[i].npc_last_move_time = system_clock::now();
 		sprintf_s(clients[i]._name, "NPC%d", i);
 		clients[i]._state = ST_INGAME;
-
-		EVENT_TYPE event;
-		event.event_id = EVENT_MOVE;
-		event.obj_id = i;
-		event.wakeup_time = system_clock::now() + 1s;
-		timer_queue.push(event);
+		clients[i].last_move_time = 0;
+		clients[i].npc_last_move_time = system_clock::now();
 	}
 	cout << "NPC initialize end.\n";
 }
 
-int constexpr MOVE_COOL_TIME = 1000; //ms
+int constexpr MOVE_COOL_TIME = 1000; // ms
 
-void HB_thread() {
+void HB_thread ()
+{
+	using namespace chrono;
+
 	while (true) {
 		auto start_time = chrono::system_clock::now();
 		for (int i = MAX_USER; i < MAX_USER + MAX_NPC; ++i) {
@@ -552,64 +538,38 @@ void HB_thread() {
 			clients[i].heart_beat();
 		}
 		auto end_time = chrono::system_clock::now();
-		auto elapsed_time = end_time - start_time;
-		if (elapsed_time < chrono::milliseconds(MOVE_COOL_TIME)) {
-			this_thread::sleep_for(chrono::milliseconds(MOVE_COOL_TIME) - elapsed_time);
+		auto elapsed = end_time - start_time;
+		if (elapsed < chrono::milliseconds(MOVE_COOL_TIME)) {
+			this_thread::sleep_for(chrono::milliseconds(MOVE_COOL_TIME) - elapsed);
 		}
 
-		std::cout << "NPCs moved. Elapsed time: " <<
-			chrono::duration_cast<chrono::milliseconds>(elapsed_time).count() << " ms\n";
+		std::cout << "Elapsed Time : "
+			<< duration_cast<milliseconds>(elapsed).count()
+			<< "ms.\n";
 	}
 }
 
-void ai_thread() {
-	int elapsed_time = 1000;
+void ai_thread()
+{
 	while (true) {
+		int elapsed_time = 1000;
 		auto current_time = system_clock::now();
 		for (int i = MAX_USER; i < MAX_USER + MAX_NPC; ++i) {
 			if (clients[i]._state != ST_INGAME) continue;
-			int duration = chrono::duration_cast<chrono::milliseconds>(current_time - clients[i].npc_last_move_time).count();
-			if (duration >= MOVE_COOL_TIME)
-			{
-				clients[i].do_npc_random_move();
+			int duration = duration_cast<milliseconds>(current_time - clients[i].npc_last_move_time).count();
+			if (duration >= MOVE_COOL_TIME) {
+				do_npc_random_move(i);
 				clients[i].npc_last_move_time = current_time;
+
 				if (duration > elapsed_time) elapsed_time++;
 				else if (duration < elapsed_time) elapsed_time--;
+
 			}
 		}
-		std::cout << "Elapsed Time: " << elapsed_time << " ms\n";
+		std::cout << "Elapsed Time : " << elapsed_time << "ms.\n";
 	}
 }
 
-void timer_thread() {
-	int elapsed_time = 1000;
-	static auto last_check_time = system_clock::now();
-	while (true) {
-		while (true)
-		{
-			auto current_time = system_clock::now();
-			EVENT_TYPE event;
-			if (false == timer_queue.try_pop(event)) break;
-
-			if(event.wakeup_time > current_time) {
-				timer_queue.push(event);
-				break;
-			}
-
-			int delay = chrono::duration_cast<chrono::milliseconds>(current_time - event.wakeup_time).count();
-			if (elapsed_time < delay) elapsed_time++;
-			else if (elapsed_time > delay) elapsed_time--;
-			clients[event.obj_id].do_timer_move();
-
-			if ((last_check_time + 1s) < system_clock::now()) {
-				std::cout << "Timer thread elapsed time: " << elapsed_time << " ms\n";
-				last_check_time = system_clock::now();
-			}
-		}
-		this_thread::yield();
-
-	}
-}
 
 int main()
 {
@@ -635,7 +595,7 @@ int main()
 	AcceptEx(g_s_socket, g_c_socket, g_a_over._send_buf, 0, addr_size + 16, addr_size + 16, 0, &g_a_over._over);
 
 	vector <thread> worker_threads;
-	thread ai_th(timer_thread);
+	thread ai_th(HB_thread);
 	int num_threads = std::thread::hardware_concurrency();
 	for (int i = 0; i < num_threads; ++i)
 		worker_threads.emplace_back(worker_thread, h_iocp);

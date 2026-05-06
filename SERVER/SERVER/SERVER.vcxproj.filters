@@ -24,7 +24,7 @@
     <ClCompile Include="npc_wakeup.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="sector_server.cpp">
+    <ClCompile Include="view_server.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
   </ItemGroup>
@@ -47,15 +47,5 @@
     <ClInclude Include="include\lualib.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <Library Include="C:\TMP\LUA_TEST\LUA_TEST\lua54.lib">
-      <Filter>리소스 파일</Filter>
-    </Library>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="npc.lua">
-      <Filter>리소스 파일</Filter>
-    </None>
   </ItemGroup>
 </Project>
