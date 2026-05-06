@@ -10,6 +10,8 @@ sf::TcpSocket socket;
 
 constexpr auto SCREEN_WIDTH = 16;
 constexpr auto SCREEN_HEIGHT = 16;
+constexpr auto MINIMAP_SIZE = 200.f;
+sf::View minimap_view;
 
 constexpr auto TILE_WIDTH = 65;
 constexpr auto WINDOW_WIDTH = SCREEN_WIDTH * TILE_WIDTH;   // size of window
@@ -106,6 +108,8 @@ void client_initialize()
 	avatar = OBJECT{ *pieces, 128, 0, 64, 64 };
 	avatar.set_name(avatar_name.c_str());
 	avatar.move(4, 4);
+	minimap_view.reset(sf::FloatRect(0, 0, WORLD_WIDTH * TILE_WIDTH, WORLD_WIDTH * TILE_WIDTH));
+	minimap_view.setViewport(sf::FloatRect(0.75f, 0.05f, 0.2f, 0.2f));
 }
 
 void client_finish()
@@ -224,47 +228,65 @@ void process_data(char* net_buf, size_t io_byte)
 
 void client_main()
 {
-	char net_buf[BUF_SIZE];
-	size_t	received;
+    char net_buf[BUF_SIZE];
+    size_t received;
+    auto recv_result = socket.receive(net_buf, BUF_SIZE, received);
+    if (recv_result != sf::Socket::NotReady && received > 0) process_data(net_buf, received);
 
-	auto recv_result = socket.receive(net_buf, BUF_SIZE, received);
-	if (recv_result == sf::Socket::Error)
-	{
-		wcout << L"Recv 에러!";
-		exit(-1);
-	}
-	if (recv_result == sf::Socket::Disconnected)
-	{
-		wcout << L"Recv 에러!";
-		exit(-1);
-	}
-	if (recv_result != sf::Socket::NotReady)
-		if (received > 0) process_data(net_buf, received);
+    sf::View main_view = g_window->getDefaultView();
+    g_window->setView(main_view);
 
-	for (int i = 0; i < SCREEN_WIDTH; ++i)
-		for (int j = 0; j < SCREEN_HEIGHT; ++j)
-		{
-			int tile_x = i + g_left_x;
-			int tile_y = j + g_top_y;
-			if ((tile_x < 0) || (tile_y < 0)) continue;
-			if (0 == (tile_x / 3 + tile_y / 3) % 2) {
-				white_tile.a_move(TILE_WIDTH * i, TILE_WIDTH * j);
-				white_tile.a_draw();
-			}
-			else
-			{
-				black_tile.a_move(TILE_WIDTH * i, TILE_WIDTH * j);
-				black_tile.a_draw();
-			}
-		}
-	avatar.draw();
-	for (auto& pl : players) pl.second.draw();
-	sf::Text text;
-	text.setFont(*g_font);
-	char buf[100];
-	sprintf_s(buf, "(%d, %d)", avatar.m_x, avatar.m_y);
-	text.setString(buf);
-	g_window->draw(text);
+    for (int i = 0; i < SCREEN_WIDTH; ++i) {
+        for (int j = 0; j < SCREEN_HEIGHT; ++j) {
+            int tile_x = i + g_left_x;
+            int tile_y = j + g_top_y;
+            if ((tile_x < 0) || (tile_y < 0)) continue;
+            if (0 == (tile_x / 3 + tile_y / 3) % 2) {
+                white_tile.a_move(TILE_WIDTH * i, TILE_WIDTH * j);
+                white_tile.a_draw();
+            } else {
+                black_tile.a_move(TILE_WIDTH * i, TILE_WIDTH * j);
+                black_tile.a_draw();
+            }
+        }
+    }
+    
+    avatar.draw();
+    for (auto& pl : players) pl.second.draw();
+
+    sf::Text text;
+    text.setFont(*g_font);
+    char buf[100];
+    sprintf_s(buf, "(%d, %d)", avatar.m_x, avatar.m_y);
+    text.setString(buf);
+    g_window->draw(text);
+
+
+	g_window->setView(minimap_view);
+
+	sf::RectangleShape minimap_bg(sf::Vector2f(WORLD_WIDTH * TILE_WIDTH, WORLD_HEIGHT * TILE_WIDTH));
+	minimap_bg.setFillColor(sf::Color(0, 0, 0, 240));
+	minimap_bg.setOutlineThickness(20.f);
+	minimap_bg.setOutlineColor(sf::Color::White);
+	g_window->draw(minimap_bg);
+
+	sf::CircleShape other_dot(60.f);
+	other_dot.setFillColor(sf::Color::Red);
+	for (auto& pl : players) {
+		float px = pl.second.m_x * TILE_WIDTH;
+		float py = pl.second.m_y * TILE_WIDTH;
+		other_dot.setPosition(px, py);
+		g_window->draw(other_dot);
+	}
+
+	sf::CircleShape my_dot(80.f);
+	my_dot.setFillColor(sf::Color::Yellow);
+	float mx = avatar.m_x * TILE_WIDTH;
+	float my = avatar.m_y * TILE_WIDTH;
+	my_dot.setPosition(mx, my);
+	g_window->draw(my_dot);
+
+	g_window->setView(g_window->getDefaultView());
 }
 
 int main()

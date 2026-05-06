@@ -6,12 +6,18 @@
 #include <vector>
 #include "protocol.h"
 #include <tbb/concurrent_unordered_map.h>
+#include <unordered_set>
+#include <mutex>
 
 #pragma comment(lib, "MSWSock.lib")
 #pragma comment(lib, "WS2_32.lib")
 using namespace std;
 
-constexpr int BUF_SIZE = 200;
+constexpr int BUF_SIZE = 500;
+constexpr int VIEW_RANGE = 5;
+constexpr int SECTOR_SIZE = 9;
+constexpr int SEC_MAX_X = (WORLD_WIDTH / SECTOR_SIZE) + 1;
+constexpr int SEC_MAX_Y = (WORLD_HEIGHT / SECTOR_SIZE) + 1;
 
 std::atomic<int> player_index = 1;
 
@@ -65,6 +71,9 @@ public:
 	char m_username[MAX_NAME_LEN];
 	short m_x, m_y;
 	int m_move_time;
+	std::unordered_set<int> m_visible_players;
+	std::mutex m_visible_mutex;
+	short m_sec_x, m_sec_y;
 
 	SESSION() {
 		std::cout << "SESSION Creation Error!\n";
@@ -75,6 +84,8 @@ public:
 		m_recv_over.m_iotype = IO_RECV;
 		m_x = rand() % WORLD_WIDTH;
 		m_y = rand() % WORLD_HEIGHT;
+		m_sec_x = m_x / SECTOR_SIZE;
+		m_sec_y = m_y / SECTOR_SIZE;
 		m_prev_recv = 0;
 		m_move_time = 0;
 	}
@@ -82,6 +93,15 @@ public:
 	{
 		closesocket(m_client);
 	}
+
+	void enter_sector();
+	void leave_sector();
+	void get_nearby_players(std::vector<std::shared_ptr<SESSION>>& out_players);
+
+	bool is_visible(short x, short y) {
+		return abs(m_x - x) <= VIEW_RANGE && abs(m_y - y) <= VIEW_RANGE;
+	}
+
 	void do_recv()
 	{
 		DWORD recv_flag = 0;
@@ -122,17 +142,46 @@ public:
 		packet.size = sizeof(S2C_RemovePlayer);
 		packet.type = S2C_REMOVE_PLAYER;
 		packet.playerId = player_id;
+
+		m_visible_mutex.lock();
+		if (m_visible_players.count(player_id) == 0) {
+			m_visible_mutex.unlock();
+			return;
+		}
+		m_visible_players.erase(player_id);
+		m_visible_mutex.unlock();
+
 		do_send(packet.size, reinterpret_cast<char*>(&packet));
 	}
 	bool process_packet(unsigned char* p);
 	void do_move(DIRECTION dir);
 };
 
-tbb::concurrent_unordered_map<int,
-	std::atomic<std::shared_ptr<SESSION>>> clients;
+tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
+
+tbb::concurrent_unordered_map<int, std::shared_ptr<SESSION>> g_sectors[SEC_MAX_Y][SEC_MAX_X];
 
 SOCKET g_server;
 HANDLE g_iocp;
+
+void SESSION::enter_sector() {
+	g_sectors[m_sec_y][m_sec_x].insert({ m_id, clients[m_id].load() });
+}
+
+void SESSION::leave_sector() {
+	g_sectors[m_sec_y][m_sec_x].unsafe_erase(m_id);
+}
+
+void SESSION::get_nearby_players(std::vector<std::shared_ptr<SESSION>>& out_players) {
+	for (int y = max(0, m_sec_y - 1); y <= min(SEC_MAX_Y - 1, m_sec_y + 1); ++y) {
+		for (int x = max(0, m_sec_x - 1); x <= min(SEC_MAX_X - 1, m_sec_x + 1); ++x) {
+			for (auto& pair : g_sectors[y][x]) {
+				if (pair.first == m_id) continue;
+				out_players.push_back(pair.second);
+			}
+		}
+	}
+}
 
 void SESSION::send_add_player(int player_id)
 {
@@ -145,23 +194,75 @@ void SESSION::send_add_player(int player_id)
 	memcpy(packet.username, pl->m_username, sizeof(packet.username));
 	packet.x = pl->m_x;
 	packet.y = pl->m_y;
+
+	m_visible_mutex.lock();
+	if (m_visible_players.count(player_id) > 0) {
+		m_visible_mutex.unlock();
+		return;
+	}
+	m_visible_players.insert(player_id);
+	m_visible_mutex.unlock();
+
 	do_send(packet.size, reinterpret_cast<char*>(&packet));
 }
 
 void SESSION::do_move(DIRECTION dir)
 {
+	auto old_v = m_visible_players;
+	short old_sec_x = m_sec_x;
+	short old_sec_y = m_sec_y;
+
 	switch (dir) {
 	case UP: m_y = max(0, m_y - 1); break;
 	case DOWN: m_y = min(WORLD_HEIGHT - 1, m_y + 1); break;
 	case LEFT: m_x = max(0, m_x - 1); break;
 	case RIGHT: m_x = min(WORLD_WIDTH - 1, m_x + 1); break;
 	}
-	// cout << "Player[" << m_id << "] moved to (" << m_x << ", " << m_y << ")\n";
-	for (auto& cl : clients) {
-		std::shared_ptr<SESSION> pl = cl.second.load();
-		if (nullptr == pl) continue;
-		if (CS_PLAYING == pl->m_state)
+
+	m_sec_x = m_x / SECTOR_SIZE;
+	m_sec_y = m_y / SECTOR_SIZE;
+
+	if (old_sec_x != m_sec_x || old_sec_y != m_sec_y) {
+		g_sectors[old_sec_y][old_sec_x].unsafe_erase(m_id);
+		g_sectors[m_sec_y][m_sec_x].insert({ m_id, clients[m_id].load() });
+	}
+
+	std::vector<std::shared_ptr<SESSION>> nearby;
+	get_nearby_players(nearby);
+
+	std::unordered_set<int> new_v;
+	for (auto& pl : nearby) {
+		if (pl == nullptr) continue;
+		if (pl->m_state != CS_PLAYING) continue;
+		if (is_visible(pl->m_x, pl->m_y)) {
+			new_v.insert(pl->m_id);
+		}
+	}
+
+	send_move_packet(m_id);
+
+	for (int id : new_v) {
+		if (old_v.count(id) == 0) { // 새로 시야에 들어옴
+			send_add_player(id);
+			std::shared_ptr<SESSION> pl = clients[id];
+			if (nullptr == pl) continue;
+			pl->send_add_player(m_id);
+		}
+		else // 시야에 계속 존재
+		{
+			std::shared_ptr<SESSION> pl = clients[id];
+			if (nullptr == pl) continue;
 			pl->send_move_packet(m_id);
+		}
+	}
+
+	for (int id : old_v) {
+		if (new_v.count(id) == 0) { // 시야에서 사라짐
+			send_remove_player(id);
+			std::shared_ptr<SESSION> pl = clients[id];
+			if (nullptr == pl) continue;
+			pl->send_remove_player(m_id);
+		}
 	}
 }
 
@@ -175,10 +276,13 @@ bool SESSION::process_packet(unsigned char* p)
 		cout << "Player[" << m_id << "] logged in as " << m_username << endl;
 		send_avatar_info();
 		m_state = CS_PLAYING;
+		enter_sector();
+
 		for (auto& c : clients) {
 			std::shared_ptr<SESSION> pl = c.second.load();
 			if (nullptr == pl) continue;
 			if (pl->m_id == m_id) continue;
+			if (false == is_visible(pl->m_x, pl->m_y)) continue;
 			if (pl->m_state != CS_PLAYING) continue;
 			send_add_player(pl->m_id);
 			pl->send_add_player(m_id);
@@ -232,9 +336,11 @@ void disconnect(int key)
 	std::cout << "client[" << key << "] Disconnected.\n";
 	std::shared_ptr<SESSION> cl = clients[key].load();
 	if (nullptr != cl) {
+		cl->leave_sector();
 		cl->m_state = CS_LOGOUT;
-		for (auto& other : clients) {
-			std::shared_ptr<SESSION> o = other.second.load();
+		auto visible_copy = cl->m_visible_players;
+		for (auto& other : visible_copy) {
+			std::shared_ptr<SESSION> o = clients[other];
 			if (nullptr == o) continue;
 			if (CS_PLAYING == o->m_state)
 				o->send_remove_player(key);
