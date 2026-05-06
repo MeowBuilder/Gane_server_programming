@@ -131,6 +131,7 @@
     <ClCompile Include="NetworkModule.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\SERVER\SERVER\protocol.h" />
     <ClInclude Include="NetworkModule.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

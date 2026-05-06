@@ -15,13 +15,13 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="game_server.cpp">
+    <ClCompile Include="npc_ai_lua.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="multi_server.cpp">
+    <ClCompile Include="npc.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="view_server.cpp">
+    <ClCompile Include="npc_wakeup.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="sector_server.cpp">
@@ -32,8 +32,30 @@
     <ClInclude Include="protocol.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClInclude Include="include\lauxlib.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="include\lua.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="include\lua.hpp">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="include\luaconf.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="include\lualib.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="packages.config" />
+    <Library Include="C:\TMP\LUA_TEST\LUA_TEST\lua54.lib">
+      <Filter>리소스 파일</Filter>
+    </Library>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="npc.lua">
+      <Filter>리소스 파일</Filter>
+    </None>
   </ItemGroup>
 </Project>
