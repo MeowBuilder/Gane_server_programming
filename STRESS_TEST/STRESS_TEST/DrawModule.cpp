@@ -15,6 +15,7 @@
 #include <gl\glu.h>			// Header File For The GLu32 Library
 #include <atomic>
 #include <memory>
+#include <iostream>
 //#include <gl\glaux.h>		// Header File For The Glaux Library
 
 #pragma comment (lib, "opengl32.lib")
@@ -500,5 +501,9 @@ int WINAPI WinMain(HINSTANCE	hInstance,			// Instance
 
 int main()
 {
+	std::cout << "Enter Server IP (default: 127.0.0.1): ";
+	std::getline(std::cin, g_server_ip);
+	if (g_server_ip.empty()) g_server_ip = "127.0.0.1";
+	std::cout << "Connecting to " << g_server_ip << "...\n";
 	WinMain(0, 0, 0, 0);
 }

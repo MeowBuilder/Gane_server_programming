@@ -19,7 +19,7 @@ using namespace chrono;
 
 extern HWND		hWnd;
 
-const static int MAX_TEST = 10000;
+const static int MAX_TEST = 100000;
 const static int MAX_CLIENTS = MAX_TEST * 2;
 const static int INVALID_ID = -1;
 const static int MAX_PACKET_SIZE = 255;
@@ -27,7 +27,7 @@ const static int MAX_BUFF_SIZE = 255;
 
 #pragma comment (lib, "ws2_32.lib")
 
-#include "..\..\SERVER\SERVER\protocol.h"
+#include "..\..\iocp_game_server\iocp_game_server\protocol_2026.h"
 
 HANDLE g_hiocp;
 
@@ -63,14 +63,15 @@ atomic_int num_connections;
 atomic_int client_to_close;
 atomic_int active_clients;
 
-int			global_delay;				// ms¥‹¿ß, 1000¿Ã ≥—¿∏∏È ≈¨∂Û¿Ãæ∆Æ ¡ı∞° ¡æ∑·
+int			global_delay;				// msÎã®ÏúÑ, 1000Ïù¥ ÎÑòÏúºÎ©¥ ÌÅ¥ÎùºÏù¥Ïñ∏Ìä∏ ÏàòÎ•º Ï§ÑÏûÑ
+std::string g_server_ip = "127.0.0.1";
 
 vector <thread*> worker_threads;
 thread test_thread;
 
 float point_cloud[MAX_TEST * 2];
 
-// ≥™¡ﬂø° NPC±Ó¡ˆ √ﬂ∞° »Æ¿Â øÎ
+// ÔøΩÔøΩÔøΩﬂøÔøΩ NPCÔøΩÔøΩÔøΩÔøΩ ÔøΩﬂ∞ÔøΩ »ÆÔøΩÔøΩ ÔøΩÔøΩ
 struct ALIEN {
 	int id;
 	int x, y;
@@ -87,7 +88,7 @@ void error_display(const char* msg, int err_no)
 		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
 		(LPTSTR)&lpMsgBuf, 0, NULL);
 	std::cout << msg;
-	std::wcout << L"ø°∑Ø" << lpMsgBuf << std::endl;
+	std::wcout << L"ÔøΩÔøΩÔøΩÔøΩ" << lpMsgBuf << std::endl;
 
 	//MessageBox(hWnd, lpMsgBuf, L"ERROR", 0);
 	LocalFree(lpMsgBuf);
@@ -127,10 +128,34 @@ void SendPacket(int cl, void* packet)
 void ProcessPacket(int ci, unsigned char packet[])
 {
 	switch (packet[1]) {
-	case SC_MOVE_OBJECT: {
-		SC_MOVE_OBJECT_PACKET* move_packet = reinterpret_cast<SC_MOVE_OBJECT_PACKET*>(packet);
-		if (move_packet->id < MAX_CLIENTS) {
-			int my_id = client_map[move_packet->id];
+	case S2C_LOGIN_RESULT: {
+		// Server sends this first upon connection; respond with C2S_Login
+		S2C_LoginResult* p = reinterpret_cast<S2C_LoginResult*>(packet);
+		if (p->success) {
+			C2S_Login l_packet;
+			sprintf_s(l_packet.username, "%d", ci);
+			l_packet.size = sizeof(l_packet);
+			l_packet.type = C2S_LOGIN;
+			SendPacket(ci, &l_packet);
+		}
+		break;
+	}
+	case S2C_AVATAR_INFO: {
+		// Server sends this after processing C2S_Login
+		g_clients[ci].connected = true;
+		active_clients++;
+		S2C_AvatarInfo* login_packet = reinterpret_cast<S2C_AvatarInfo*>(packet);
+		if (login_packet->playerId < MAX_CLIENTS)
+			client_map[login_packet->playerId] = ci;
+		g_clients[ci].id = login_packet->playerId;
+		g_clients[ci].x = login_packet->x;
+		g_clients[ci].y = login_packet->y;
+		break;
+	}
+	case S2C_MOVE_PLAYER: {
+		S2C_MovePlayer* move_packet = reinterpret_cast<S2C_MovePlayer*>(packet);
+		if (move_packet->playerId < MAX_CLIENTS) {
+			int my_id = client_map[move_packet->playerId];
 			if (-1 != my_id) {
 				g_clients[my_id].x = move_packet->x;
 				g_clients[my_id].y = move_packet->y;
@@ -138,36 +163,16 @@ void ProcessPacket(int ci, unsigned char packet[])
 			if (ci == my_id) {
 				if (0 != move_packet->move_time) {
 					auto d_ms = duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count() - move_packet->move_time;
-
 					if (global_delay < d_ms) global_delay++;
 					else if (global_delay > d_ms) global_delay--;
 				}
 			}
 		}
+		break;
 	}
-					   break;
-	case SC_ADD_OBJECT: break;
-	case SC_REMOVE_OBJECT: break;
-	case SC_CHAT: break;
-	case SC_LOGIN_INFO:
-	{
-		g_clients[ci].connected = true;
-		active_clients++;
-		SC_LOGIN_INFO_PACKET* login_packet = reinterpret_cast<SC_LOGIN_INFO_PACKET*>(packet);
-		int my_id = ci;
-		client_map[login_packet->id] = my_id;
-		g_clients[my_id].id = login_packet->id;
-		g_clients[my_id].x = login_packet->x;
-		g_clients[my_id].y = login_packet->y;
-
-		//cs_packet_teleport t_packet;
-		//t_packet.size = sizeof(t_packet);
-		//t_packet.type = CS_TELEPORT;
-		//SendPacket(my_id, &t_packet);
-	}
-	break;
-	default: MessageBox(hWnd, L"Unknown Packet Type", L"ERROR", 0);
-		while (true);
+	case S2C_ADD_PLAYER: break;
+	case S2C_REMOVE_PLAYER: break;
+	default: break; // ignore unknown packets (e.g. NPC-related)
 	}
 }
 
@@ -203,7 +208,7 @@ void Worker_Thread()
 			while (io_size > 0) {
 				if (0 == psize) psize = buf[0];
 				if (io_size + pr_size >= psize) {
-					// ¡ˆ±› ∆–≈∂ øœº∫ ∞°¥…
+					// ÔøΩÔøΩÔøΩÔøΩ ÔøΩÔøΩ≈∂ ÔøΩœºÔøΩ ÔøΩÔøΩÔøΩÔøΩ
 					unsigned char packet[MAX_PACKET_SIZE];
 					memcpy(packet, g_clients[ci].packet_buf, pr_size);
 					memcpy(packet + pr_size, buf, psize - pr_size);
@@ -294,8 +299,8 @@ void Adjust_Number_Of_Client()
 	SOCKADDR_IN ServerAddr;
 	ZeroMemory(&ServerAddr, sizeof(SOCKADDR_IN));
 	ServerAddr.sin_family = AF_INET;
-	ServerAddr.sin_port = htons(PORT_NUM);
-	ServerAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	ServerAddr.sin_port = htons(PORT);
+	ServerAddr.sin_addr.s_addr = inet_addr(g_server_ip.c_str());
 
 
 	int Result = WSAConnect(g_clients[num_connections].client_socket, (sockaddr*)&ServerAddr, sizeof(ServerAddr), NULL, NULL, NULL, NULL);
@@ -314,14 +319,7 @@ void Adjust_Number_Of_Client()
 	DWORD recv_flag = 0;
 	CreateIoCompletionPort(reinterpret_cast<HANDLE>(g_clients[num_connections].client_socket), g_hiocp, num_connections, 0);
 
-	CS_LOGIN_PACKET l_packet;
-
-	int temp = num_connections;
-	sprintf_s(l_packet.name, "%d", temp);
-	l_packet.size = sizeof(l_packet);
-	l_packet.type = CS_LOGIN;
-	SendPacket(num_connections, &l_packet);
-
+	// Do NOT send C2S_Login here; wait for S2C_LOGIN_RESULT from server (handled in ProcessPacket)
 
 	int ret = WSARecv(g_clients[num_connections].client_socket, &g_clients[num_connections].recv_over.wsabuf, 1,
 		NULL, &recv_flag, &g_clients[num_connections].recv_over.over, NULL);
@@ -348,16 +346,16 @@ void Test_Thread()
 			if (false == g_clients[i].connected) continue;
 			if (g_clients[i].last_move_time + 1s > high_resolution_clock::now()) continue;
 			g_clients[i].last_move_time = high_resolution_clock::now();
-			CS_MOVE_PACKET my_packet;
+			C2S_Move my_packet;
 			my_packet.size = sizeof(my_packet);
-			my_packet.type = CS_MOVE;
+			my_packet.type = C2S_MOVE;
 			switch (rand() % 4) {
-			case 0: my_packet.direction = 0; break;
-			case 1: my_packet.direction = 1; break;
-			case 2: my_packet.direction = 2; break;
-			case 3: my_packet.direction = 3; break;
+			case 0: my_packet.dir = UP; break;
+			case 1: my_packet.dir = DOWN; break;
+			case 2: my_packet.dir = LEFT; break;
+			case 3: my_packet.dir = RIGHT; break;
 			}
-			my_packet.move_time = static_cast<unsigned>(duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count());
+			my_packet.move_time = static_cast<int>(duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count());
 			SendPacket(i, &my_packet);
 		}
 	}
