@@ -15,27 +15,19 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-<<<<<<< Updated upstream:iocp_game_server/iocp_game_server/iocp_game_server.vcxproj.filters
-    <None Include="packages.config" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="protocol_2026.h">
-      <Filter>헤더 파일</Filter>
-    </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="server.cpp">
+    <ClCompile Include="DrawModule.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-=======
-    <ClCompile Include="npc.cpp">
+    <ClCompile Include="NetworkModule.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="protocol.h">
+    <ClInclude Include="NetworkModule.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
->>>>>>> Stashed changes:SERVER/SERVER/SERVER.vcxproj.filters
+    <ClInclude Include="..\..\iocp_game_server\iocp_game_server\protocol.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
